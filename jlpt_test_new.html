@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JLPT 雲端題庫 (JSONP 最終版)</title>
+    <style>
+        /* 保持原本樣式 */
+        :root { --primary: #4a90e2; --secondary: #f5f6fa; --text: #2f3640; --correct: #44bd32; --wrong: #c23616; --timer: #e1b12c; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #dcdde1; display: flex; justify-content: center; min-height: 100vh; margin: 0; }
+        .app-container { width: 100%; max-width: 600px; background: white; min-height: 100vh; padding-bottom: 20px; box-shadow: 0 0 20px rgba(0,0,0,0.1); display: flex; flex-direction: column; position: relative; }
+        header { background: var(--primary); color: white; padding: 1rem; text-align: center; }
+        .screen { display: none; padding: 20px; }
+        .screen.active { display: block; }
+        button { width: 100%; padding: 15px; background: var(--primary); color: white; border: none; border-radius: 8px; margin-top: 10px; cursor: pointer; font-size: 16px; }
+        button:hover { background: #357abd; }
+        select, input { width: 100%; padding: 12px; margin-bottom: 10px; border-radius: 8px; border: 1px solid #ccc; box-sizing: border-box; }
+        .option-btn { width: 100%; text-align: left; background: white; color: #333; border: 2px solid #eee; margin-bottom: 10px; }
+        .option-btn.correct { background: var(--correct); color: white; border-color: var(--correct); }
+        .option-btn.wrong { background: var(--wrong); color: white; border-color: var(--wrong); }
+        .timer-bar-bg { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin-top: 5px; }
+        .timer-fill { height: 100%; background: var(--timer); width: 100%; }
+        #loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.95); z-index: 999; display: flex; justify-content: center; align-items: center; flex-direction: column; }
+        #error-msg { color: red; margin-top: 20px; text-align: center; display: none; padding: 20px; background: #fff0f0; border: 1px solid red; border-radius: 5px; max-width: 80%; word-break: break-all;}
+    </style>
+</head>
+<body>
+
+<div id="loading-overlay">
+    <h2 style="color:var(--primary)">JLPT 測驗載入中</h2>
+    <p>正在透過 JSONP 連線至題庫...</p>
+    <div id="error-msg"></div>
+</div>
+
+<div class="app-container">
+    <header><h1>JLPT 模擬測驗</h1></header>
+
+    <!-- Home -->
+    <div id="screen-home" class="screen active">
+        <h3>選擇模式</h3>
+        <button onclick="setupQuiz('sentence')">綜合測驗 (文法/句型)</button>
+        <button onclick="setupQuiz('word_mcq')">單字 (日翻中)</button>
+        <button onclick="setupQuiz('word_input')">單字 (中翻日)</button>
+        <div style="text-align:center; margin-top:10px; font-size:0.8em; color:#999;">
+            連線狀態: <span id="connection-status" style="color:orange;">檢查中...</span>
+        </div>
+    </div>
+
+    <!-- Settings -->
+    <div id="screen-settings" class="screen">
+        <h3 id="setting-title">設定</h3>
+        <label>難度</label>
+        <select id="level-select">
+            <option value="N5">N5</option>
+            <option value="N4">N4</option>
+            <option value="N3">N3</option>
+        </select>
+        <label>題數</label>
+        <select id="count-select">
+            <option value="10">10</option>
+            <option value="20">20</option>
+            <option value="50">50</option>
+        </select>
+        <button onclick="startQuiz()">開始</button>
+        <button onclick="showScreen('screen-home')" style="background:#777">返回</button>
+    </div>
+
+    <!-- Quiz -->
+    <div id="screen-quiz" class="screen">
+        <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+            <span id="quiz-level-display"></span>
+            <span id="quiz-progress"></span>
+        </div>
+        <div id="timer-wrapper" style="display:none; margin-bottom:15px;">
+            <div style="display:flex; justify-content:space-between;">
+                <span>剩餘時間</span>
+                <span id="timer-text" style="font-weight:bold; color:#e1b12c;">30</span>
+            </div>
+            <div class="timer-bar-bg"><div id="timer-fill" class="timer-fill"></div></div>
+        </div>
+        <div id="question-text" style="font-size:1.2rem; font-weight:bold; margin-bottom:20px;"></div>
+        <div id="options-area"></div>
+        <div id="input-area" style="display:none;">
+            <input type="text" id="answer-input" placeholder="輸入假名...">
+            <button onclick="checkInputAnswer()">送出</button>
+        </div>
+        <button id="give-up-btn" onclick="giveUp()" style="background:#e67e22; margin-top:20px;">放棄</button>
+        <div id="feedback-area" style="margin-top:20px; padding:15px; background:#f5f6fa; display:none;">
+            <div id="feedback-msg" style="font-weight:bold; font-size:1.2rem;"></div>
+            <div id="feedback-ans" style="margin-top:5px;"></div>
+            <button onclick="nextQuestion()">下一題</button>
+        </div>
+    </div>
+
+    <!-- Result -->
+    <div id="screen-result" class="screen">
+        <h3>結果</h3>
+        <h1 id="final-score" style="text-align:center; font-size:3rem; color:#4a90e2;"></h1>
+        <div id="review-container"></div>
+        <button onclick="showScreen('screen-home')">回首頁</button>
+    </div>
+</div>
+
+<script>
+// ============================================
+// 【請確認此 ID 正確】
+// ID 來源：網址 https://docs.google.com/spreadsheets/d/[ID]/edit
+// ============================================
+const SHEET_ID = '18BiMS-KorLwTNdpZjY4BSWmGOy1tW0u9Dzwd3eqUf5s'; 
+// ============================================
+
+let sentenceData = [];
+let wordData = [];
+let quizQueue = [];
+let currentMode = '';
+let currentQIndex = 0;
+let score = 0;
+let wrongAnswers = [];
+let timerInterval = null;
+
+// JSONP 載入器
+function loadSheetJsonp(sheetName, callbackName) {
+    return new Promise((resolve, reject) => {
+        // 設定逾時機制 (10秒)
+        const timeout = setTimeout(() => {
+            reject(new Error(`下載分頁 ${sheetName} 逾時 (10秒)。請確認 ID 正確且網路通暢。`));
+        }, 10000);
+
+        // 定義全域回調函數
+        window[callbackName] = function(json) {
+            clearTimeout(timeout);
+            try {
+                const rows = json.table.rows;
+                const result = rows.map(r => {
+                    // Google Viz API 回傳格式為 {c: [{v: value}, {v: value}, ...]}
+                    // 我們需要將它們展平，處理可能的 null
+                    return r.c.map(cell => (cell && cell.v !== null) ? cell.v : "");
+                });
+                resolve(result);
+            } catch (e) {
+                reject(new Error(`解析 ${sheetName} 資料失敗: ${e.message}`));
+            } finally {
+                // 清理 script 標籤
+                document.getElementById('script-' + sheetName)?.remove();
+                delete window[callbackName];
+            }
+        };
+
+        // 注入 Script 標籤
+        const script = document.createElement('script');
+        script.id = 'script-' + sheetName;
+        // 關鍵網址：tqx=responseHandler:函數名
+        script.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=responseHandler:${callbackName}&sheet=${sheetName}`;
+        script.onerror = () => reject(new Error(`無法載入腳本，請確認 ID 正確且「共用」已設為「知道連結的任何人」。`));
+        document.body.appendChild(script);
+    });
+}
+
+// 初始化
+window.addEventListener('DOMContentLoaded', async () => {
+    try {
+        if(!SHEET_ID || SHEET_ID.includes('你的ID')) {
+            throw new Error("請先在程式碼中填寫正確的 Google Sheet ID");
+        }
+
+        // 並行下載資料
+        const [rawGrammar, rawVocab] = await Promise.all([
+            loadSheetJsonp('Grammar', 'onGrammarLoaded'),
+            loadSheetJsonp('Vocab', 'onVocabLoaded')
+        ]);
+
+        // 資料轉換 (假設欄位順序固定，避免 header 命名問題)
+        // 欄位對應: 0=Level, 1=Question/Word, 2,3,4,5=Opts/Kana, 6=Ans/Mean, 7=Exp
+        
+        // 處理文法 (略過第一列標題)
+        sentenceData = rawGrammar.slice(1).map(row => ({
+            level: row[0],         // A欄
+            question: row[1],      // B欄
+            options: [row[2], row[3], row[4], row[5]], // C,D,E,F欄
+            answer: row[6],        // G欄
+            explanation: row[7]    // H欄
+        })).filter(d => d.level && d.question); // 過濾空行
+
+        // 處理單字
+        wordData = rawVocab.slice(1).map(row => ({
+            level: row[0],      // A欄
+            word: row[1],       // B欄
+            kana: row[2],       // C欄
+            meaning: row[3]     // D欄
+        })).filter(d => d.level && d.word);
+
+        document.getElementById('loading-overlay').style.display = 'none';
+        document.getElementById('connection-status').innerHTML = '<span style="color:green">✔ 已連線 (JSONP)</span>';
+        console.log(`載入成功: 文法 ${sentenceData.length} 題, 單字 ${wordData.length} 題`);
+
+    } catch (err) {
+        const msgDiv = document.getElementById('error-msg');
+        msgDiv.style.display = 'block';
+        msgDiv.innerHTML = `<strong>連線失敗</strong><br>${err.message}<br><br>請確認：<br>1. Google Sheet ID 正確<br>2. 試算表名稱分別為 Grammar 和 Vocab<br>3. 共用權限已開`;
+    }
+});
+
+// === 以下邏輯維持不變 ===
+
+function showScreen(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+}
+
+function setupQuiz(mode) {
+    currentMode = mode;
+    showScreen('screen-settings');
+}
+
+function startQuiz() {
+    const level = document.getElementById('level-select').value;
+    const count = parseInt(document.getElementById('count-select').value);
+    
+    quizQueue = generateQuestions(currentMode, level, count);
+
+    if (quizQueue.length === 0) {
+        alert(`題庫中沒有 ${level} 的題目。`);
+        return;
+    }
+
+    currentQIndex = 0;
+    score = 0;
+    wrongAnswers = [];
+    
+    document.getElementById('timer-wrapper').style.display = (currentMode === 'sentence') ? 'block' : 'none';
+    document.getElementById('input-area').style.display = (currentMode === 'word_input') ? 'block' : 'none';
+    document.getElementById('options-area').style.display = (currentMode === 'word_input') ? 'none' : 'block';
+    document.getElementById('give-up-btn').style.display = (currentMode === 'sentence') ? 'none' : 'block';
+
+    showScreen('screen-quiz');
+    loadQuestion();
+}
+
+function generateQuestions(mode, level, count) {
+    let raw = [], result = [];
+    if (mode === 'sentence') raw = sentenceData.filter(d => d.level === level);
+    else raw = wordData.filter(d => d.level === level);
+
+    if(raw.length === 0) return [];
+
+    let pool = [...raw];
+    while(pool.length < count && pool.length > 0) pool = pool.concat(raw);
+    pool = pool.sort(() => Math.random() - 0.5).slice(0, count);
+
+    return pool.map(item => {
+        if(mode === 'sentence') {
+            return { ...item, options: item.options.sort(() => Math.random() - 0.5) };
+        } else if (mode === 'word_mcq') {
+            let others = wordData.filter(w => w.level === level && w.word !== item.word);
+            let dist = others.sort(() => Math.random() - 0.5).slice(0,3).map(w => w.meaning);
+            while(dist.length < 3) dist.push('其他');
+            return {
+                type: 'mcq', qText: `${item.word} (${item.kana})`, 
+                ans: item.meaning, opts: [item.meaning, ...dist].sort(() => Math.random() - 0.5),
+                orig: item
+            };
+        } else {
+            return { type: 'input', qText: item.meaning, ans: item.kana, orig: item };
+        }
+    });
+}
+
+function loadQuestion() {
+    if (currentQIndex >= quizQueue.length) { showResult(); return; }
+    
+    const q = quizQueue[currentQIndex];
+    document.getElementById('quiz-level-display').innerText = q.level || '';
+    document.getElementById('quiz-progress').innerText = `${currentQIndex+1}/${quizQueue.length}`;
+    document.getElementById('feedback-area').style.display = 'none';
+    document.getElementById('answer-input').value = '';
+    
+    const optArea = document.getElementById('options-area');
+    optArea.innerHTML = '';
+    document.querySelectorAll('button').forEach(b => b.disabled = false);
+
+    if (currentMode === 'word_input') {
+        document.getElementById('question-text').innerHTML = `請翻譯：${q.qText}<br><span style="font-size:0.8em;color:#666">${q.orig.word}</span>`;
+    } else {
+        document.getElementById('question-text').innerText = (currentMode === 'sentence') ? q.question : q.qText;
+        const opts = (currentMode === 'sentence') ? q.options : q.opts;
+        const ans = (currentMode === 'sentence') ? q.answer : q.ans;
+        
+        opts.forEach(opt => {
+            const btn = document.createElement('button');
+            btn.className = 'option-btn';
+            btn.innerText = opt;
+            btn.onclick = () => handleAnswer(opt === ans, ans, q.explanation);
+            optArea.appendChild(btn);
+        });
+    }
+
+    if(currentMode === 'sentence') startTimer(30, () => handleAnswer(false, q.answer, q.explanation));
+}
+
+function startTimer(sec, onTimeout) {
+    clearInterval(timerInterval);
+    let t = sec;
+    const txt = document.getElementById('timer-text');
+    const fill = document.getElementById('timer-fill');
+    txt.innerText = t;
+    fill.style.width = '100%';
+    
+    timerInterval = setInterval(() => {
+        t--;
+        txt.innerText = t;
+        fill.style.width = (t/sec*100)+'%';
+        if(t<=0) { clearInterval(timerInterval); onTimeout(); }
+    }, 1000);
+}
+
+function checkInputAnswer() {
+    const val = document.getElementById('answer-input').value.trim();
+    if(!val) return;
+    const q = quizQueue[currentQIndex];
+    handleAnswer(val === q.ans, q.ans, null);
+}
+
+function giveUp() {
+    const q = quizQueue[currentQIndex];
+    const ans = (currentMode === 'sentence') ? q.answer : q.ans;
+    handleAnswer(false, ans, null);
+}
+
+function handleAnswer(isCorrect, correctAns, explanation) {
+    clearInterval(timerInterval);
+    if(isCorrect) score++;
+    else {
+        const q = quizQueue[currentQIndex];
+        wrongAnswers.push({ 
+            q: (currentMode==='word_input') ? q.qText : (q.question||q.qText), 
+            a: correctAns, 
+            exp: explanation 
+        });
+    }
+
+    document.querySelectorAll('.option-btn').forEach(btn => {
+        btn.disabled = true;
+        if(btn.innerText === correctAns) btn.classList.add('correct');
+        else if(!isCorrect && btn.onclick) btn.classList.add('wrong');
+    });
+    
+    const fb = document.getElementById('feedback-area');
+    fb.style.display = 'block';
+    document.getElementById('feedback-msg').innerHTML = isCorrect ? 
+        '<span style="color:#44bd32">⭕ 答對了</span>' : '<span style="color:#c23616">❌ 答錯了</span>';
+    document.getElementById('feedback-ans').innerHTML = `正解：${correctAns}` + (explanation ? `<br><small>${explanation}</small>` : '');
+}
+
+function nextQuestion() {
+    currentQIndex++;
+    loadQuestion();
+}
+
+function showResult() {
+    showScreen('screen-result');
+    document.getElementById('final-score').innerText = Math.round(score/quizQueue.length*100);
+    const box = document.getElementById('review-container');
+    box.innerHTML = '';
+    if(wrongAnswers.length === 0) box.innerHTML = '<p style="text-align:center">完美！全對！</p>';
+    wrongAnswers.forEach(w => {
+        box.innerHTML += `<div style="background:#fff; padding:10px; margin-bottom:10px; border-left:4px solid red;">
+            <div>${w.q}</div><div style="color:green">正解: ${w.a}</div>${w.exp?`<div style="color:#666;font-size:0.9em">${w.exp}</div>`:''}
+        </div>`;
+    });
+}
+</script>
+</body>
+</html>
