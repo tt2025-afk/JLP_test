@@ -3,9 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JLPT 雲端題庫 (JSONP 最終版)</title>
+    <title>JLPT 雲端題庫 (Github Pages 版)</title>
     <style>
-        /* 保持原本樣式 */
         :root { --primary: #4a90e2; --secondary: #f5f6fa; --text: #2f3640; --correct: #44bd32; --wrong: #c23616; --timer: #e1b12c; }
         body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #dcdde1; display: flex; justify-content: center; min-height: 100vh; margin: 0; }
         .app-container { width: 100%; max-width: 600px; background: white; min-height: 100vh; padding-bottom: 20px; box-shadow: 0 0 20px rgba(0,0,0,0.1); display: flex; flex-direction: column; position: relative; }
@@ -85,6 +84,8 @@
             <button onclick="checkInputAnswer()">送出</button>
         </div>
         <button id="give-up-btn" onclick="giveUp()" style="background:#e67e22; margin-top:20px;">放棄</button>
+        
+        <!-- Feedback Area -->
         <div id="feedback-area" style="margin-top:20px; padding:15px; background:#f5f6fa; display:none;">
             <div id="feedback-msg" style="font-weight:bold; font-size:1.2rem;"></div>
             <div id="feedback-ans" style="margin-top:5px;"></div>
@@ -103,9 +104,7 @@
 
 <script>
 // ============================================
-// 【請確認此 ID 正確】
-// ID 來源：網址 https://docs.google.com/spreadsheets/d/[ID]/edit
-// ============================================
+// Google Sheet ID
 const SHEET_ID = '18BiMS-KorLwTNdpZjY4BSWmGOy1tW0u9Dzwd3eqUf5s'; 
 // ============================================
 
@@ -121,37 +120,30 @@ let timerInterval = null;
 // JSONP 載入器
 function loadSheetJsonp(sheetName, callbackName) {
     return new Promise((resolve, reject) => {
-        // 設定逾時機制 (10秒)
         const timeout = setTimeout(() => {
-            reject(new Error(`下載分頁 ${sheetName} 逾時 (10秒)。請確認 ID 正確且網路通暢。`));
+            reject(new Error(`下載分頁 ${sheetName} 逾時。`));
         }, 10000);
 
-        // 定義全域回調函數
         window[callbackName] = function(json) {
             clearTimeout(timeout);
             try {
                 const rows = json.table.rows;
                 const result = rows.map(r => {
-                    // Google Viz API 回傳格式為 {c: [{v: value}, {v: value}, ...]}
-                    // 我們需要將它們展平，處理可能的 null
                     return r.c.map(cell => (cell && cell.v !== null) ? cell.v : "");
                 });
                 resolve(result);
             } catch (e) {
-                reject(new Error(`解析 ${sheetName} 資料失敗: ${e.message}`));
+                reject(new Error(`解析 ${sheetName} 失敗`));
             } finally {
-                // 清理 script 標籤
                 document.getElementById('script-' + sheetName)?.remove();
                 delete window[callbackName];
             }
         };
 
-        // 注入 Script 標籤
         const script = document.createElement('script');
         script.id = 'script-' + sheetName;
-        // 關鍵網址：tqx=responseHandler:函數名
         script.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=responseHandler:${callbackName}&sheet=${sheetName}`;
-        script.onerror = () => reject(new Error(`無法載入腳本，請確認 ID 正確且「共用」已設為「知道連結的任何人」。`));
+        script.onerror = () => reject(new Error(`無法載入腳本，請確認 ID 正確。`));
         document.body.appendChild(script);
     });
 }
@@ -159,48 +151,28 @@ function loadSheetJsonp(sheetName, callbackName) {
 // 初始化
 window.addEventListener('DOMContentLoaded', async () => {
     try {
-        if(!SHEET_ID || SHEET_ID.includes('你的ID')) {
-            throw new Error("請先在程式碼中填寫正確的 Google Sheet ID");
-        }
-
-        // 並行下載資料
         const [rawGrammar, rawVocab] = await Promise.all([
             loadSheetJsonp('Grammar', 'onGrammarLoaded'),
             loadSheetJsonp('Vocab', 'onVocabLoaded')
         ]);
 
-        // 資料轉換 (假設欄位順序固定，避免 header 命名問題)
-        // 欄位對應: 0=Level, 1=Question/Word, 2,3,4,5=Opts/Kana, 6=Ans/Mean, 7=Exp
-        
-        // 處理文法 (略過第一列標題)
+        // 轉換資料
         sentenceData = rawGrammar.slice(1).map(row => ({
-            level: row[0],         // A欄
-            question: row[1],      // B欄
-            options: [row[2], row[3], row[4], row[5]], // C,D,E,F欄
-            answer: row[6],        // G欄
-            explanation: row[7]    // H欄
-        })).filter(d => d.level && d.question); // 過濾空行
+            level: row[0], question: row[1], options: [row[2], row[3], row[4], row[5]], answer: row[6], explanation: row[7]
+        })).filter(d => d.level && d.question);
 
-        // 處理單字
         wordData = rawVocab.slice(1).map(row => ({
-            level: row[0],      // A欄
-            word: row[1],       // B欄
-            kana: row[2],       // C欄
-            meaning: row[3]     // D欄
+            level: row[0], word: row[1], kana: row[2], meaning: row[3]
         })).filter(d => d.level && d.word);
 
         document.getElementById('loading-overlay').style.display = 'none';
         document.getElementById('connection-status').innerHTML = '<span style="color:green">✔ 已連線 (JSONP)</span>';
-        console.log(`載入成功: 文法 ${sentenceData.length} 題, 單字 ${wordData.length} 題`);
 
     } catch (err) {
-        const msgDiv = document.getElementById('error-msg');
-        msgDiv.style.display = 'block';
-        msgDiv.innerHTML = `<strong>連線失敗</strong><br>${err.message}<br><br>請確認：<br>1. Google Sheet ID 正確<br>2. 試算表名稱分別為 Grammar 和 Vocab<br>3. 共用權限已開`;
+        document.getElementById('error-msg').style.display = 'block';
+        document.getElementById('error-msg').innerHTML = `連線失敗: ${err.message}`;
     }
 });
-
-// === 以下邏輯維持不變 ===
 
 function showScreen(id) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -227,6 +199,7 @@ function startQuiz() {
     score = 0;
     wrongAnswers = [];
     
+    // UI 設定
     document.getElementById('timer-wrapper').style.display = (currentMode === 'sentence') ? 'block' : 'none';
     document.getElementById('input-area').style.display = (currentMode === 'word_input') ? 'block' : 'none';
     document.getElementById('options-area').style.display = (currentMode === 'word_input') ? 'none' : 'block';
@@ -251,16 +224,25 @@ function generateQuestions(mode, level, count) {
         if(mode === 'sentence') {
             return { ...item, options: item.options.sort(() => Math.random() - 0.5) };
         } else if (mode === 'word_mcq') {
+            // 日翻中：題目是假名 (Kana)，答案是中文 (Meaning)
             let others = wordData.filter(w => w.level === level && w.word !== item.word);
             let dist = others.sort(() => Math.random() - 0.5).slice(0,3).map(w => w.meaning);
             while(dist.length < 3) dist.push('其他');
             return {
-                type: 'mcq', qText: `${item.word} (${item.kana})`, 
-                ans: item.meaning, opts: [item.meaning, ...dist].sort(() => Math.random() - 0.5),
+                type: 'mcq', 
+                qText: item.kana, // 修改：只顯示假名
+                ans: item.meaning, 
+                opts: [item.meaning, ...dist].sort(() => Math.random() - 0.5),
                 orig: item
             };
         } else {
-            return { type: 'input', qText: item.meaning, ans: item.kana, orig: item };
+            // 中翻日：題目是中文 (Meaning)，答案是假名 (Kana)
+            return { 
+                type: 'input', 
+                qText: item.meaning, // 修改：只顯示中文
+                ans: item.kana, 
+                orig: item 
+            };
         }
     });
 }
@@ -279,8 +261,10 @@ function loadQuestion() {
     document.querySelectorAll('button').forEach(b => b.disabled = false);
 
     if (currentMode === 'word_input') {
-        document.getElementById('question-text').innerHTML = `請翻譯：${q.qText}<br><span style="font-size:0.8em;color:#666">${q.orig.word}</span>`;
+        // 中翻日：只顯示題目中文
+        document.getElementById('question-text').innerHTML = `請翻譯：<br><span style="font-size:1.5em">${q.qText}</span>`;
     } else {
+        // 其他模式
         document.getElementById('question-text').innerText = (currentMode === 'sentence') ? q.question : q.qText;
         const opts = (currentMode === 'sentence') ? q.options : q.opts;
         const ans = (currentMode === 'sentence') ? q.answer : q.ans;
@@ -329,15 +313,26 @@ function giveUp() {
 function handleAnswer(isCorrect, correctAns, explanation) {
     clearInterval(timerInterval);
     if(isCorrect) score++;
-    else {
-        const q = quizQueue[currentQIndex];
+    
+    const q = quizQueue[currentQIndex];
+
+    // 準備錯題紀錄與顯示的答案字串
+    let displayAnswer = correctAns;
+    
+    // 如果是單字模式，答案顯示要加上「漢字 (Word)」
+    if (currentMode !== 'sentence') {
+        displayAnswer = `${correctAns} (${q.orig.word})`;
+    }
+
+    if(!isCorrect) {
         wrongAnswers.push({ 
             q: (currentMode==='word_input') ? q.qText : (q.question||q.qText), 
-            a: correctAns, 
+            a: displayAnswer, // 紀錄完整答案包含漢字
             exp: explanation 
         });
     }
 
+    // 鎖定按鈕
     document.querySelectorAll('.option-btn').forEach(btn => {
         btn.disabled = true;
         if(btn.innerText === correctAns) btn.classList.add('correct');
@@ -346,9 +341,12 @@ function handleAnswer(isCorrect, correctAns, explanation) {
     
     const fb = document.getElementById('feedback-area');
     fb.style.display = 'block';
+    
     document.getElementById('feedback-msg').innerHTML = isCorrect ? 
         '<span style="color:#44bd32">⭕ 答對了</span>' : '<span style="color:#c23616">❌ 答錯了</span>';
-    document.getElementById('feedback-ans').innerHTML = `正解：${correctAns}` + (explanation ? `<br><small>${explanation}</small>` : '');
+        
+    // 這裡顯示正解：如果是單字題，displayAnswer 已經包含 (Word)
+    document.getElementById('feedback-ans').innerHTML = `正解：${displayAnswer}` + (explanation ? `<br><small>${explanation}</small>` : '');
 }
 
 function nextQuestion() {
